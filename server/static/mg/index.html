@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>RPG Master UI</title>
+  <style>
+    body { background: #111; color: #eee; font-family: sans-serif; text-align:center; }
+    canvas { border: 1px solid #666; display: block; margin: 10px auto; }
+    #controls { margin: 10px auto; width: 80%; }
+    form { margin: 10px; padding: 10px; border: 1px solid #444; }
+  </style>
+</head>
+<body>
+  <h1>RPG Table - Panel Mistrza Gry</h1>
+
+  <div id="controls">
+    <form id="uploadTokenForm" enctype="multipart/form-data">
+      <h3>Dodaj token</h3>
+      ID: <input type="text" name="id" required>
+      Plik: <input type="file" name="file" accept="image/*" required>
+      X: <input type="number" name="x" value="100">
+      Y: <input type="number" name="y" value="100">
+      <button type="submit">Dodaj</button>
+    </form>
+
+    <form id="uploadMapForm" enctype="multipart/form-data">
+      <h3>Załaduj mapę</h3>
+      Mapa: <input type="file" name="file" accept="image/*" required>
+      <button type="submit">Załaduj</button>
+    </form>
+  </div>
+
+  <canvas id="board" width="1280" height="720"></canvas>
+
+<script>
+const ws = new WebSocket(`ws://${location.host}/ws`);
+let state = {map:null, tokens:[]};
+const canvas = document.getElementById("board");
+const ctx = canvas.getContext("2d");
+let dragging = null;
+
+ws.onmessage = ev => {
+  const msg = JSON.parse(ev.data);
+  if(msg.action === "update_state") {
+    state = msg.data;
+    draw();
+  }
+};
+
+function draw(){
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  if(state.map){
+    const img = new Image();
+    img.src = `/assets/${state.map}`;
+    img.onload = ()=> {
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      drawTokens();
+    };
+  } else {
+    ctx.fillStyle = "#222"; ctx.fillRect(0,0,canvas.width,canvas.height);
+    drawTokens();
+  }
+}
+
+function drawTokens(){
+  state.tokens.forEach(t=>{
+    if(t.image){
+      const img = new Image();
+      img.src = `/assets/${t.image}`;
+      img.onload = ()=> ctx.drawImage(img, t.x-16, t.y-16, 32, 32);
+    } else {
+      ctx.fillStyle = "red";
+      ctx.beginPath();
+      ctx.arc(t.x, t.y, 16, 0, 2*Math.PI);
+      ctx.fill();
+      ctx.fillStyle="white";
+      ctx.fillText(t.id, t.x+18, t.y);
+    }
+  });
+}
+
+canvas.addEventListener("mousedown", e=>{
+  const x = e.offsetX, y=e.offsetY;
+  for(let t of state.tokens){
+    const dx=x-t.x, dy=y-t.y;
+    if(dx*dx+dy*dy <= 16*16){
+      dragging = t.id;
+      break;
+    }
+  }
+});
+canvas.addEventListener("mousemove", e=>{
+  if(dragging){
+    const token = state.tokens.find(t=>t.id===dragging);
+    token.x=e.offsetX; token.y=e.offsetY;
+    draw();
+  }
+});
+canvas.addEventListener("mouseup", e=>{
+  if(dragging){
+    ws.send(JSON.stringify({action:"move_token",data:{id:dragging,x:e.offsetX,y:e.offsetY}}));
+    dragging=null;
+  }
+});
+
+// upload token
+document.getElementById("uploadTokenForm").onsubmit = async ev => {
+  ev.preventDefault();
+  const form = new FormData(ev.target);
+  await fetch("/upload_token", { method:"POST", body:form });
+  ev.target.reset();
+};
+
+// upload map
+document.getElementById("uploadMapForm").onsubmit = async ev => {
+  ev.preventDefault();
+  const form = new FormData(ev.target);
+  await fetch("/upload_map", { method:"POST", body:form });
+  ev.target.reset();
+};
+</script>
+</body>
+</html>

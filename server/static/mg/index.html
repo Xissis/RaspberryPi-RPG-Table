@@ -2,56 +2,99 @@
 <html>
 <head>
   <meta charset="utf-8">
-  <title>RPG Master UI</title>
+  <title>RPG Master UI - Scenes</title>
   <style>
     body { background: #111; color: #eee; font-family: sans-serif; text-align:center; }
-    canvas { border: 1px solid #666; display: block; margin: 10px auto; }
-    #controls { margin: 10px auto; width: 80%; }
-    form { margin: 10px; padding: 10px; border: 1px solid #444; }
+    #tabs { display:flex; gap:8px; justify-content:center; margin:10px; flex-wrap:wrap; }
+    .tab { padding:6px 10px; border:1px solid #444; background:#222; cursor:pointer; border-radius:6px; }
+    .tab.active { background:#2a6; color:#032; border-color:#6f6; }
+    #controls { margin: 10px auto; width: 96%; max-width: 1100px; display:flex; gap:12px; justify-content:center; flex-wrap:wrap;}
+    form { margin: 10px; padding: 10px; border: 1px solid #444; display: inline-block; vertical-align: top; background:#171717; }
+    label { display:inline-block; min-width:70px; text-align:right; margin-right:6px; }
+    input { margin:4px 6px; }
+    canvas { border:1px solid #555; display:block; margin:10px auto; background:#000; }
+    #revealControls { margin: 10px; padding:10px; background:#171717; border:1px solid #444; display:inline-block; }
   </style>
 </head>
 <body>
-  <h1>RPG Table - Panel Mistrza Gry</h1>
+  <h1>RPG Table - Panel Mistrza Gry (Sceny)</h1>
+
+  <div id="tabs"></div>
 
   <div id="controls">
+    <form id="createSceneForm" enctype="multipart/form-data">
+      <h4>Nowa scena</h4>
+      <div><label>Nazwa:</label><input type="text" name="name" required></div>
+      <div><label>Mapa (opcjonalnie):</label><input type="file" name="file" accept="image/*"></div>
+      <button type="submit">Utwórz scenę</button>
+    </form>
+
     <form id="uploadTokenForm" enctype="multipart/form-data">
-      <h3>Dodaj token</h3>
-      ID: <input type="text" name="id" required>
-      Plik: <input type="file" name="file" accept="image/*" required>
-      X: <input type="number" name="x" value="100">
-      Y: <input type="number" name="y" value="100">
-      <button type="submit">Dodaj</button>
+      <h4>Dodaj token (do aktywnej sceny)</h4>
+      <div><label>ID:</label><input type="text" name="id" required></div>
+      <div><label>Plik:</label><input type="file" name="file" accept="image/*"></div>
+      <div><label>X:</label><input type="number" name="x" value="100"></div>
+      <div><label>Y:</label><input type="number" name="y" value="100"></div>
+      <div><label>Owner:</label><input type="text" name="owner" placeholder="player / npc / gm"></div>
+      <div><label>Vision:</label><input type="number" name="vision" placeholder="np. 180"></div>
+      <div><label>Light:</label><input type="number" name="light_radius" placeholder="np. 120"></div>
+      <button type="submit">Dodaj token</button>
     </form>
 
     <form id="uploadMapForm" enctype="multipart/form-data">
-      <h3>Załaduj mapę</h3>
-      Mapa: <input type="file" name="file" accept="image/*" required>
+      <h4>Zastąp mapę (aktywna scena)</h4>
+      <div><label>Mapa:</label><input type="file" name="file" accept="image/*" required></div>
       <button type="submit">Załaduj</button>
     </form>
+
+    <div id="revealControls">
+      <h4>Odsłanianie mgły</h4>
+      <label>Promień:</label><input type="number" id="revealRadius" value="150" style="width:80px;">
+      <button type="button" onclick="toggleRevealMode()">Tryb odsłaniania</button>
+    </div>
   </div>
 
   <canvas id="board" width="1280" height="720"></canvas>
 
 <script>
-const ws = new WebSocket(`ws://${location.host}/ws`);
-let state = {map:null, tokens:[]};
+const host = window.location.host;
+const ws = new WebSocket(`ws://${host}/ws`);
+let state = {active:null, scene:null, scenes:{}};
 const canvas = document.getElementById("board");
 const ctx = canvas.getContext("2d");
 let dragging = null;
+let revealMode = false;
 
+ws.onopen = ()=> console.log("WS open");
 ws.onmessage = ev => {
   const msg = JSON.parse(ev.data);
-  if(msg.action === "update_state") {
+  if(msg.action === "server_state") {
     state = msg.data;
+    renderTabs();
     draw();
   }
 };
 
+function renderTabs(){
+  const tabs = document.getElementById("tabs");
+  tabs.innerHTML = "";
+  const scenes = state.scenes || {};
+  for(const sid of Object.keys(scenes)){
+    const t = document.createElement("div");
+    t.className = "tab" + (sid === state.active ? " active" : "");
+    t.textContent = sid;
+    t.onclick = async ()=> {
+      await fetch(`http://${host}/switch_scene`, { method:"POST", body: new URLSearchParams({scene: sid}) });
+    };
+    tabs.appendChild(t);
+  }
+}
+
 function draw(){
   ctx.clearRect(0,0,canvas.width,canvas.height);
-  if(state.map){
+  if(state.scene && state.scene.map_file){
     const img = new Image();
-    img.src = `/assets/${state.map}`;
+    img.src = `/assets/${state.scene.map_file}`;
     img.onload = ()=> {
       ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
       drawTokens();
@@ -63,7 +106,8 @@ function draw(){
 }
 
 function drawTokens(){
-  state.tokens.forEach(t=>{
+  if(!state.scene) return;
+  state.scene.tokens.forEach(t=>{
     if(t.image){
       const img = new Image();
       img.src = `/assets/${t.image}`;
@@ -74,14 +118,17 @@ function drawTokens(){
       ctx.arc(t.x, t.y, 16, 0, 2*Math.PI);
       ctx.fill();
       ctx.fillStyle="white";
+      ctx.font = "14px sans-serif";
       ctx.fillText(t.id, t.x+18, t.y);
     }
   });
 }
 
+// drag & drop tokens
 canvas.addEventListener("mousedown", e=>{
   const x = e.offsetX, y=e.offsetY;
-  for(let t of state.tokens){
+  if(!state.scene) return;
+  for(let t of state.scene.tokens){
     const dx=x-t.x, dy=y-t.y;
     if(dx*dx+dy*dy <= 16*16){
       dragging = t.id;
@@ -90,32 +137,51 @@ canvas.addEventListener("mousedown", e=>{
   }
 });
 canvas.addEventListener("mousemove", e=>{
-  if(dragging){
-    const token = state.tokens.find(t=>t.id===dragging);
+  if(dragging && state.scene){
+    const token = state.scene.tokens.find(t=>t.id===dragging);
     token.x=e.offsetX; token.y=e.offsetY;
     draw();
   }
 });
 canvas.addEventListener("mouseup", e=>{
   if(dragging){
-    ws.send(JSON.stringify({action:"move_token",data:{id:dragging,x:e.offsetX,y:e.offsetY}}));
-    dragging=null;
+    ws.send(JSON.stringify({action:"move_token", data:{id:dragging, x:e.offsetX, y:e.offsetY}}));
+    dragging = null;
   }
 });
 
-// upload token
-document.getElementById("uploadTokenForm").onsubmit = async ev => {
+// tryb odsłaniania
+function toggleRevealMode(){
+  revealMode = !revealMode;
+  alert("Tryb odsłaniania: " + (revealMode ? "WŁĄCZONY" : "wyłączony"));
+}
+
+canvas.addEventListener("click", e=>{
+  if(revealMode){
+    const r = parseInt(document.getElementById("revealRadius").value) || 100;
+    ws.send(JSON.stringify({action:"reveal", data:{x:e.offsetX, y:e.offsetY, r:r}}));
+  }
+});
+
+// forms
+document.getElementById("createSceneForm").onsubmit = async ev => {
   ev.preventDefault();
   const form = new FormData(ev.target);
-  await fetch("/upload_token", { method:"POST", body:form });
+  await fetch(`http://${host}/create_scene`, { method:"POST", body:form });
   ev.target.reset();
 };
 
-// upload map
+document.getElementById("uploadTokenForm").onsubmit = async ev => {
+  ev.preventDefault();
+  const form = new FormData(ev.target);
+  await fetch(`http://${host}/upload_token`, { method:"POST", body:form });
+  ev.target.reset();
+};
+
 document.getElementById("uploadMapForm").onsubmit = async ev => {
   ev.preventDefault();
   const form = new FormData(ev.target);
-  await fetch("/upload_map", { method:"POST", body:form });
+  await fetch(`http://${host}/upload_map`, { method:"POST", body:form });
   ev.target.reset();
 };
 </script>
